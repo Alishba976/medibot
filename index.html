@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MediBot - AI Medical Companion</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @keyframes scan { from { top: 0%; } to { top: 100%; } }
+        .scan-line {
+            position: absolute; top: 0; left: 0; width: 100%; height: 4px;
+            background: linear-gradient(to bottom, transparent, #3b82f6, transparent);
+            animation: scan 3s linear infinite; pointer-events: none;
+        }
+        .ai-glow { box-shadow: 0 0 20px rgba(59, 130, 246, 0.4); }
+    </style>
+</head>
+<body class="bg-slate-50 font-sans text-slate-900 min-h-screen">
+
+    <header class="bg-white/80 backdrop-blur-md border-b sticky top-0 z-50 px-6 py-4 flex justify-between items-center">
+        <div class="flex items-center gap-3">
+            <div id="bot-status-icon" class="w-10 h-10 bg-blue-600 rounded-full flex items-center justify-center text-white transition-all">
+                <i class="fas fa-robot text-xl"></i>
+            </div>
+            <div>
+                <h1 class="text-xl font-bold text-blue-900">MediBot PROACTIVE</h1>
+                <p id="sub-status" class="text-[10px] text-slate-500 uppercase font-black tracking-widest">Free Tier Optimized</p>
+            </div>
+        </div>
+        <div id="status-badge" class="px-4 py-2 bg-green-100 text-green-700 rounded-full text-[10px] font-black shadow-sm">
+            AI GUARD ACTIVE
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto p-4 md:p-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
+        
+        <!-- Video Feed -->
+        <div class="lg:col-span-7 space-y-6">
+            <div class="bg-slate-900 rounded-[2rem] overflow-hidden relative shadow-2xl aspect-video border-4 border-white">
+                <video id="webcam" autoplay playsinline muted class="w-full h-full object-cover"></video>
+                <div class="scan-line"></div>
+                
+                <div class="absolute top-4 left-4 z-20">
+                    <div id="ai-thought-pill" class="bg-black/60 backdrop-blur-md text-white text-[10px] px-3 py-1.5 rounded-full border border-white/20">
+                        <i class="fas fa-eye mr-2 text-blue-400"></i><span id="ai-thought">Initializing...</span>
+                    </div>
+                </div>
+
+                <!-- Emergency Overlay -->
+                <div id="emergency-ui" class="hidden absolute inset-0 flex items-center justify-center bg-red-600/80 backdrop-blur-lg z-50 p-6">
+                    <div class="bg-white p-8 rounded-3xl text-center shadow-2xl max-w-sm">
+                        <i class="fas fa-exclamation-triangle text-red-600 text-5xl mb-4"></i>
+                        <h2 class="text-2xl font-black mb-2">SOS DETECTED</h2>
+                        <p id="emergency-reason" class="text-slate-600 mb-6">AI detected patient distress.</p>
+                        <button onclick="window.cancelEmergency()" class="w-full bg-slate-100 py-3 rounded-xl font-bold uppercase text-xs">Dismiss</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Buttons -->
+            <div class="grid grid-cols-2 gap-4">
+                <button onclick="window.simulateEmergency('Nurse Call')" class="p-5 bg-blue-600 text-white rounded-2xl shadow-lg flex items-center gap-4">
+                    <i class="fas fa-user-nurse text-xl"></i>
+                    <span class="font-bold uppercase text-xs">Call Nurse</span>
+                </button>
+                <button onclick="window.simulateEmergency('Emergency SOS')" class="p-5 bg-red-600 text-white rounded-2xl shadow-lg flex items-center gap-4">
+                    <i class="fas fa-ambulance text-xl"></i>
+                    <span class="font-bold uppercase text-xs">SOS Emergency</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Chat / Logs -->
+        <div class="lg:col-span-5 flex flex-col h-[550px] bg-white rounded-[2rem] shadow-xl border border-slate-200 overflow-hidden">
+            <div class="p-5 border-b bg-slate-50 flex justify-between items-center">
+                <span class="text-[10px] font-black uppercase text-slate-400">Activity Log</span>
+                <div id="neural-pulse" class="w-2 h-2 bg-blue-500 rounded-full"></div>
+            </div>
+            <div id="chat-box" class="flex-1 overflow-y-auto p-6 space-y-4 text-sm scroll-smooth"></div>
+            <div class="p-4 bg-slate-100 text-center">
+                <p id="voice-preview" class="text-[10px] text-slate-400 font-bold uppercase">Listening for keywords...</p>
+            </div>
+        </div>
+    </main>
+
+    <audio id="siren" src="https://assets.mixkit.co/active_storage/sfx/2568/2568-preview.mp3" loop></audio>
+
+    <script type="module">
+        const apiKey = ""; // <--- PASTE YOUR KEY HERE
+        const model = "gemini-1.5-flash"; 
+        const ttsModel = "gemini-2.5-flash-preview-tts";
+
+        let isProcessing = false;
+        let isEmergency = false;
+        let lastScanTime = 0;
+
+        async function init() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                document.getElementById('webcam').srcObject = stream;
+                setupVoice();
+                startVisionLoop();
+            } catch (e) { addMessage("System", "Error: Permissions denied."); }
+        }
+
+        function setupVoice() {
+            const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if (!Rec) return;
+            const recognition = new Rec();
+            recognition.continuous = true;
+            recognition.onresult = (e) => {
+                const text = e.results[e.resultIndex][0].transcript.toLowerCase();
+                document.getElementById('voice-preview').innerText = text;
+                if (text.match(/help|doctor|nurse|pain|sos/)) window.simulateEmergency("Voice Trigger: " + text);
+                else if (text.length > 10 && !isProcessing) handleChat(text);
+            };
+            recognition.onend = () => { if(!isEmergency) recognition.start(); };
+            recognition.start();
+        }
+
+        async function startVisionLoop() {
+            const video = document.getElementById('webcam');
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+
+            setInterval(async () => {
+                if (isProcessing || isEmergency) return;
+                const now = Date.now();
+                if (now - lastScanTime < 20000) return; // 20-second interval for Free Tier safety
+                
+                lastScanTime = now;
+                canvas.width = 320; canvas.height = 240;
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const b64 = canvas.toDataURL('image/jpeg', 0.1).split(',')[1];
+
+                try {
+                    document.getElementById('neural-pulse').classList.add('animate-ping');
+                    const res = await callGemini("Patient check: If coughing, falling, or distress say 'SOS'. Otherwise, 2 words to describe them.", b64);
+                    document.getElementById('ai-thought').innerText = res;
+
+                    if (res.toUpperCase().includes("SOS")) {
+                        window.simulateEmergency("AI Vision: Patient in distress");
+                    } else if (res.toLowerCase().includes("cough") || res.toLowerCase().includes("water")) {
+                        addMessage("MediBot", res);
+                        await speak(res);
+                    }
+                } catch (e) {} finally {
+                    document.getElementById('neural-pulse').classList.remove('animate-ping');
+                }
+            }, 1000);
+        }
+
+        async function handleChat(text) {
+            isProcessing = true;
+            addMessage("User", text);
+            try {
+                const res = await callGemini(text, null, "Kind nurse assistant. Max 20 words.");
+                addMessage("MediBot", res);
+                await speak(res);
+            } finally { isProcessing = false; }
+        }
+
+        async function callGemini(p, b = null, s = "") {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+            const parts = [{ text: p }];
+            if (b) parts.push({ inlineData: { mimeType: "image/jpeg", data: b } });
+            const res = await fetch(url, { method: 'POST', body: JSON.stringify({ contents: [{ parts }], systemInstruction: s ? { parts: [{ text: s }] } : undefined }) });
+            const d = await res.json();
+            return d.candidates[0].content.parts[0].text;
+        }
+
+        async function speak(t) {
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${ttsModel}:generateContent?key=${apiKey}`;
+            const res = await fetch(url, { method: 'POST', body: JSON.stringify({ contents: [{ parts: [{ text: t }] }], generationConfig: { responseModalities: ["AUDIO"] } }) });
+            const d = await res.json();
+            const pcm = d.candidates[0].content.parts[0].inlineData.data;
+            playAudio(pcm);
+        }
+
+        function playAudio(b64) {
+            const buffer = Uint8Array.from(atob(b64), c => c.charCodeAt(0)).buffer;
+            const header = new ArrayBuffer(44);
+            const d = new DataView(header);
+            const s = (o, v) => { for(let i=0; i<v.length; i++) d.setUint8(o+i, v.charCodeAt(i)); };
+            s(0, 'RIFF'); d.setUint32(4, 32 + buffer.byteLength, true); s(8, 'WAVE'); s(12, 'fmt ');
+            d.setUint32(16, 16, true); d.setUint16(20, 1, true); d.setUint16(22, 1, true);
+            d.setUint32(24, 24000, true); d.setUint32(28, 48000, true); d.setUint16(32, 2, true); d.setUint16(34, 16, true);
+            s(36, 'data'); d.setUint32(40, buffer.byteLength, true);
+            new Audio(URL.createObjectURL(new Blob([header, buffer], { type: 'audio/wav' }))).play();
+        }
+
+        function addMessage(s, t) {
+            const box = document.getElementById('chat-box');
+            const div = document.createElement('div');
+            div.className = `p-4 rounded-2xl ${s === "User" ? 'bg-blue-600 text-white ml-8' : 'bg-slate-100 text-slate-800 mr-8'} shadow-sm`;
+            div.innerHTML = `<span class="text-[9px] uppercase font-black opacity-50 block mb-1">${s}</span>${t}`;
+            box.appendChild(div);
+            box.scrollTop = box.scrollHeight;
+        }
+
+        window.simulateEmergency = (r) => {
+            isEmergency = true;
+            document.getElementById('emergency-ui').classList.remove('hidden');
+            document.getElementById('emergency-reason').innerText = r;
+            document.getElementById('siren').play();
+            addMessage("ALERT", r);
+        };
+
+        window.cancelEmergency = () => {
+            isEmergency = false;
+            document.getElementById('emergency-ui').classList.add('hidden');
+            document.getElementById('siren').pause();
+        };
+
+        window.onload = init;
+    </script>
+</body>
+</html>
